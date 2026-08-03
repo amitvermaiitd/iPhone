@@ -46,7 +46,11 @@
   }
   .note-card .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
   .note-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
-  .note-card .snippet { font-size: 14px; color: #d4d4de; line-height: 1.4; white-space: pre-wrap; }
+  .note-card .snippet {
+    font-size: 15px; color: #d4d4de; line-height: 1.55; white-space: pre-wrap;
+    overflow-wrap: anywhere; margin-bottom: 4px;
+  }
+  .note-card.live .snippet { font-size: 16px; color: var(--text); }
   .note-card .status { font-size: 12px; color: var(--accent); }
   .note-card.live { border-color: var(--danger); }
   .live-status { display: flex; align-items: center; gap: 6px; color: var(--danger) !important; margin-bottom: 6px; }
@@ -117,8 +121,11 @@
 <body>
 <div id="app">
   <header>
-    <h1>🎙️ Notemaker <span class="build">gemini·v5 live</span></h1>
-    <button class="icon-btn" id="settingsBtn">⚙️</button>
+    <h1>🎙️ Notemaker <span class="build">gemini·v6</span></h1>
+    <div>
+      <button class="icon-btn" id="clearBtn" title="Delete all notes">🗑️</button>
+      <button class="icon-btn" id="settingsBtn">⚙️</button>
+    </div>
   </header>
   <main id="notesList"></main>
   <footer>
@@ -178,11 +185,11 @@ function renderNotes() {
       <div class="title">${n.title || 'Meeting note'}</div>
       ${live ? '<div class="status live-status"><span class="dot"></span>Recording — live transcript</div>' :
         n.status === 'transcribing' ? '<div class="status">Transcribing…</div>' :
-        n.status === 'error' ? `<div class="status" style="color:var(--danger)">Error: ${escapeHtml(n.error)}</div>` : ''}
-      <div class="snippet">${live
-        ? (escapeHtml(text) || '<span style="color:var(--muted)">Listening…</span>')
-        : escapeHtml(text).slice(0, 220) + (text.length > 220 ? '…' : '')}</div>
-      ${live ? '' : `<button class="del" data-id="${n.id}">Delete</button>`}
+        n.status === 'error' ? `<div class="status" style="color:var(--danger)">Couldn't transcribe: ${escapeHtml(n.error)}</div>` : ''}
+      <div class="snippet">${escapeHtml(text) || (live
+        ? '<span style="color:var(--muted)">Listening…</span>'
+        : '<span style="color:var(--muted)">(no text)</span>')}</div>
+      <button class="del" data-id="${n.id}">Delete</button>
     </div>
   `;
   }).join('');
@@ -191,7 +198,10 @@ function renderNotes() {
 notesList.addEventListener('click', (e) => {
   if (e.target.classList.contains('del')) {
     const id = e.target.dataset.id;
+    // Deleting the note being recorded has to stop the recording too.
+    if (id === activeNoteId && recording) stopRecording();
     notes = notes.filter(n => n.id !== id);
+    if (id === activeNoteId) activeNoteId = null;
     saveNotes(); renderNotes();
     return;
   }
@@ -214,6 +224,20 @@ function openDetail(id) {
   document.body.appendChild(el);
   el.querySelector('#closeDetail').onclick = () => el.remove();
 }
+
+// --- Clear all ---
+document.getElementById('clearBtn').onclick = () => {
+  if (!notes.length) return;
+  const failed = notes.filter((n) => n.status === 'error').length;
+  const msg = failed
+    ? `Delete all ${notes.length} note(s), including ${failed} failed one(s)?`
+    : `Delete all ${notes.length} note(s)? This cannot be undone.`;
+  if (!confirm(msg)) return;
+  if (recording) stopRecording();
+  notes = [];
+  activeNoteId = null;
+  saveNotes(); renderNotes();
+};
 
 // --- Settings ---
 settingsBtn.onclick = () => {
