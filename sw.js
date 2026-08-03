@@ -1,4 +1,4 @@
-const CACHE = 'notemaker-v3';
+const CACHE = 'notemaker-v4';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (e) => {
