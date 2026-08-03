@@ -1,0 +1,11 @@
+{
+  "name": "Notemaker",
+  "short_name": "Notemaker",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0b0b12",
+  "theme_color": "#0b0b12",
+  "icons": [
+    { "src": "icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

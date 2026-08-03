@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0b0b12" />
+<title>Notemaker</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon.png" />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b12;
+    --panel: #16161f;
+    --panel2: #1e1e2a;
+    --accent: #7c6cff;
+    --danger: #ff5c5c;
+    --text: #f0f0f5;
+    --muted: #9a9aab;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    height: 100%;
+  }
+  #app { display: flex; flex-direction: column; height: 100dvh; }
+  header {
+    padding: calc(env(safe-area-inset-top) + 12px) 16px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--panel); border-bottom: 1px solid #262633;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .icon-btn {
+    background: none; border: none; color: var(--muted); font-size: 20px;
+    padding: 6px; cursor: pointer;
+  }
+  main { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 140px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 60px; font-size: 15px; }
+  .note-card {
+    background: var(--panel); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px;
+    border: 1px solid #23232f;
+  }
+  .note-card .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .note-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+  .note-card .snippet { font-size: 14px; color: #d4d4de; line-height: 1.4; white-space: pre-wrap; }
+  .note-card .status { font-size: 12px; color: var(--accent); }
+  .note-card .del { color: var(--danger); background: none; border: none; font-size: 13px; padding: 4px 0; margin-top: 8px; cursor: pointer; }
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 14px 16px calc(env(safe-area-inset-bottom) + 14px);
+    background: linear-gradient(to top, var(--bg) 60%, transparent);
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+  }
+  #timer { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 20px; }
+  #recordBtn {
+    width: 76px; height: 76px; border-radius: 50%; border: 4px solid #3a3a4a;
+    background: var(--danger); cursor: pointer; position: relative;
+  }
+  #recordBtn.recording { background: var(--panel2); }
+  #recordBtn.recording::after {
+    content: ""; position: absolute; inset: 26px; background: var(--danger); border-radius: 6px;
+  }
+  #recordBtn:not(.recording)::after {
+    content: ""; position: absolute; inset: 8px; background: var(--danger); border-radius: 50%;
+  }
+  .hint { font-size: 12px; color: var(--muted); max-width: 280px; text-align: center; }
+
+  /* Settings modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: flex-end;
+    z-index: 20;
+  }
+  .modal {
+    background: var(--panel); width: 100%; border-radius: 20px 20px 0 0;
+    padding: 20px 20px calc(env(safe-area-inset-bottom) + 20px);
+  }
+  .modal h2 { margin: 0 0 14px; font-size: 17px; }
+  .modal label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
+  .modal input, .modal textarea {
+    width: 100%; background: var(--panel2); border: 1px solid #2c2c3a; border-radius: 10px;
+    color: var(--text); padding: 10px 12px; font-size: 14px; margin-bottom: 14px;
+  }
+  .modal .row { display: flex; gap: 10px; }
+  .modal button.primary {
+    flex: 1; background: var(--accent); color: white; border: none; border-radius: 10px;
+    padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .modal button.secondary {
+    flex: 1; background: var(--panel2); color: var(--text); border: none; border-radius: 10px;
+    padding: 12px; font-size: 15px; cursor: pointer;
+  }
+  .modal p.note { font-size: 12px; color: var(--muted); margin-top: -6px; margin-bottom: 14px; }
+
+  /* Detail view */
+  .detail-backdrop {
+    position: fixed; inset: 0; background: var(--bg); z-index: 15; display: flex; flex-direction: column;
+  }
+  .detail-header {
+    padding: calc(env(safe-area-inset-top) + 12px) 16px 12px; display: flex; align-items: center; gap: 12px;
+    background: var(--panel); border-bottom: 1px solid #262633;
+  }
+  .detail-header button { background: none; border: none; color: var(--accent); font-size: 16px; cursor: pointer; }
+  .detail-body { padding: 16px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🎙️ Notemaker</h1>
+    <button class="icon-btn" id="settingsBtn">⚙️</button>
+  </header>
+  <main id="notesList"></main>
+  <footer>
+    <div id="timer"></div>
+    <button id="recordBtn" aria-label="Record"></button>
+    <div class="hint">Keep this tab open &amp; screen unlocked while recording. For calls, use speakerphone.</div>
+  </footer>
+</div>
+
+<script>
+const STORAGE_KEY = 'notemaker_notes_v1';
+const APIKEY_KEY = 'notemaker_openai_key';
+
+let notes = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let mediaRecorder, chunks = [], stream, startTime, timerInterval;
+let wakeLock = null;
+
+const notesList = document.getElementById('notesList');
+const recordBtn = document.getElementById('recordBtn');
+const timerEl = document.getElementById('timer');
+const settingsBtn = document.getElementById('settingsBtn');
+
+function saveNotes() { localStorage.setItem(STORAGE_KEY, JSON.stringify(notes)); }
+
+function renderNotes() {
+  if (notes.length === 0) {
+    notesList.innerHTML = '<div class="empty">No notes yet.<br>Tap the red button to start recording.</div>';
+    return;
+  }
+  notesList.innerHTML = notes.slice().reverse().map(n => `
+    <div class="note-card" data-id="${n.id}">
+      <div class="meta"><span>${new Date(n.createdAt).toLocaleString()}</span><span>${n.duration || ''}</span></div>
+      <div class="title">${n.title || 'Meeting note'}</div>
+      ${n.status === 'transcribing' ? '<div class="status">Transcribing…</div>' :
+        n.status === 'error' ? `<div class="status" style="color:var(--danger)">Error: ${n.error}</div>` :
+        `<div class="snippet">${(n.transcript || '').slice(0, 220)}${(n.transcript||'').length > 220 ? '…' : ''}</div>`}
+      <button class="del" data-id="${n.id}">Delete</button>
+    </div>
+  `).join('');
+}
+
+notesList.addEventListener('click', (e) => {
+  if (e.target.classList.contains('del')) {
+    const id = e.target.dataset.id;
+    notes = notes.filter(n => n.id !== id);
+    saveNotes(); renderNotes();
+    return;
+  }
+  const card = e.target.closest('.note-card');
+  if (card) openDetail(card.dataset.id);
+});
+
+function openDetail(id) {
+  const n = notes.find(x => x.id === id);
+  if (!n) return;
+  const el = document.createElement('div');
+  el.className = 'detail-backdrop';
+  el.innerHTML = `
+    <div class="detail-header">
+      <button id="closeDetail">← Back</button>
+      <strong>${n.title || 'Meeting note'}</strong>
+    </div>
+    <div class="detail-body">${n.status === 'transcribing' ? 'Transcribing…' : n.status === 'error' ? 'Error: ' + n.error : (n.transcript || '(empty)')}</div>
+  `;
+  document.body.appendChild(el);
+  el.querySelector('#closeDetail').onclick = () => el.remove();
+}
+
+// --- Settings ---
+settingsBtn.onclick = () => {
+  const key = localStorage.getItem(APIKEY_KEY) || '';
+  const el = document.createElement('div');
+  el.className = 'modal-backdrop';
+  el.innerHTML = `
+    <div class="modal">
+      <h2>Settings</h2>
+      <label>OpenAI API Key (used for transcription)</label>
+      <input type="password" id="apiKeyInput" placeholder="sk-..." value="${key}" autocapitalize="off" autocorrect="off" />
+      <p class="note">Stored only in this browser (localStorage). Never sent anywhere except OpenAI's API directly from your device.</p>
+      <div class="row">
+        <button class="secondary" id="cancelSettings">Cancel</button>
+        <button class="primary" id="saveSettings">Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  el.querySelector('#cancelSettings').onclick = () => el.remove();
+  el.querySelector('#saveSettings').onclick = () => {
+    localStorage.setItem(APIKEY_KEY, el.querySelector('#apiKeyInput').value.trim());
+    el.remove();
+  };
+};
+
+// --- Recording ---
+recordBtn.onclick = async () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  const apiKey = localStorage.getItem(APIKEY_KEY);
+  if (!apiKey) {
+    alert('Please set your OpenAI API key in Settings (⚙️) first.');
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    alert('Microphone access denied: ' + err.message);
+    return;
+  }
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch (e) {}
+
+  chunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm';
+  mediaRecorder = new MediaRecorder(stream, { mimeType });
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    clearInterval(timerInterval);
+    timerEl.textContent = '';
+    recordBtn.classList.remove('recording');
+
+    const blob = new Blob(chunks, { type: mimeType });
+    const durationSec = Math.round((Date.now() - startTime) / 1000);
+    const id = Date.now().toString();
+    const note = {
+      id,
+      createdAt: Date.now(),
+      duration: formatDuration(durationSec),
+      status: 'transcribing',
+      title: 'Meeting note',
+    };
+    notes.push(note);
+    saveNotes(); renderNotes();
+    transcribe(blob, mimeType, id, apiKey);
+  };
+  mediaRecorder.start();
+  startTime = Date.now();
+  recordBtn.classList.add('recording');
+  timerInterval = setInterval(() => {
+    timerEl.textContent = formatDuration(Math.round((Date.now() - startTime) / 1000));
+  }, 500);
+};
+
+function formatDuration(sec) {
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+async function transcribe(blob, mimeType, id, apiKey) {
+  try {
+    const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
+    const form = new FormData();
+    form.append('file', blob, `recording.${ext}`);
+    form.append('model', 'whisper-1');
+
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`API error ${res.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const note = notes.find(n => n.id === id);
+    if (note) {
+      note.transcript = data.text || '(no speech detected)';
+      note.status = 'done';
+      note.title = (data.text || '').split(/[.!?\n]/)[0].slice(0, 60) || 'Meeting note';
+    }
+  } catch (err) {
+    const note = notes.find(n => n.id === id);
+    if (note) { note.status = 'error'; note.error = err.message; }
+  }
+  saveNotes(); renderNotes();
+}
+
+renderNotes();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
