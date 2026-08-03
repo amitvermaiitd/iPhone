@@ -48,6 +48,13 @@
   .note-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
   .note-card .snippet { font-size: 14px; color: #d4d4de; line-height: 1.4; white-space: pre-wrap; }
   .note-card .status { font-size: 12px; color: var(--accent); }
+  .note-card.live { border-color: var(--danger); }
+  .live-status { display: flex; align-items: center; gap: 6px; color: var(--danger) !important; margin-bottom: 6px; }
+  .live-status .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
   .note-card .del { color: var(--danger); background: none; border: none; font-size: 13px; padding: 4px 0; margin-top: 8px; cursor: pointer; }
   footer {
     position: fixed; bottom: 0; left: 0; right: 0;
@@ -110,7 +117,7 @@
 <body>
 <div id="app">
   <header>
-    <h1>🎙️ Notemaker <span class="build">gemini·v4</span></h1>
+    <h1>🎙️ Notemaker <span class="build">gemini·v5 live</span></h1>
     <button class="icon-btn" id="settingsBtn">⚙️</button>
   </header>
   <main id="notesList"></main>
@@ -128,6 +135,13 @@ const APIKEY_KEY = 'notemaker_gemini_key';
 let notes = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 let mediaRecorder, chunks = [], stream, startTime, timerInterval;
 let wakeLock = null;
+let recording = false;
+let activeNoteId = null;
+let segmentTimer = null;
+
+// Audio is captured in short segments so each one can be transcribed while the
+// meeting is still running, instead of waiting for the whole recording to end.
+const SEGMENT_MS = 15000;
 
 const notesList = document.getElementById('notesList');
 const recordBtn = document.getElementById('recordBtn');
@@ -136,21 +150,42 @@ const settingsBtn = document.getElementById('settingsBtn');
 
 function saveNotes() { localStorage.setItem(STORAGE_KEY, JSON.stringify(notes)); }
 
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Segments arrive out of order, so always read them back by index.
+function noteText(n) {
+  if (n.segments && n.segments.length) {
+    return n.segments.filter((s) => s).join(' ').trim();
+  }
+  return n.transcript || '';
+}
+
 function renderNotes() {
   if (notes.length === 0) {
     notesList.innerHTML = '<div class="empty">No notes yet.<br>Tap the red button to start recording.</div>';
     return;
   }
-  notesList.innerHTML = notes.slice().reverse().map(n => `
-    <div class="note-card" data-id="${n.id}">
+  notesList.innerHTML = notes.slice().reverse().map(n => {
+    const live = n.status === 'recording';
+    const text = noteText(n);
+    return `
+    <div class="note-card ${live ? 'live' : ''}" data-id="${n.id}">
       <div class="meta"><span>${new Date(n.createdAt).toLocaleString()}</span><span>${n.duration || ''}</span></div>
       <div class="title">${n.title || 'Meeting note'}</div>
-      ${n.status === 'transcribing' ? '<div class="status">Transcribing…</div>' :
-        n.status === 'error' ? `<div class="status" style="color:var(--danger)">Error: ${n.error}</div>` :
-        `<div class="snippet">${(n.transcript || '').slice(0, 220)}${(n.transcript||'').length > 220 ? '…' : ''}</div>`}
-      <button class="del" data-id="${n.id}">Delete</button>
+      ${live ? '<div class="status live-status"><span class="dot"></span>Recording — live transcript</div>' :
+        n.status === 'transcribing' ? '<div class="status">Transcribing…</div>' :
+        n.status === 'error' ? `<div class="status" style="color:var(--danger)">Error: ${escapeHtml(n.error)}</div>` : ''}
+      <div class="snippet">${live
+        ? (escapeHtml(text) || '<span style="color:var(--muted)">Listening…</span>')
+        : escapeHtml(text).slice(0, 220) + (text.length > 220 ? '…' : '')}</div>
+      ${live ? '' : `<button class="del" data-id="${n.id}">Delete</button>`}
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 notesList.addEventListener('click', (e) => {
@@ -172,9 +207,9 @@ function openDetail(id) {
   el.innerHTML = `
     <div class="detail-header">
       <button id="closeDetail">← Back</button>
-      <strong>${n.title || 'Meeting note'}</strong>
+      <strong>${escapeHtml(n.title || 'Meeting note')}</strong>
     </div>
-    <div class="detail-body">${n.status === 'transcribing' ? 'Transcribing…' : n.status === 'error' ? 'Error: ' + n.error : (n.transcript || '(empty)')}</div>
+    <div class="detail-body">${n.status === 'error' ? 'Error: ' + escapeHtml(n.error) : (escapeHtml(noteText(n)) || '(empty)')}</div>
   `;
   document.body.appendChild(el);
   el.querySelector('#closeDetail').onclick = () => el.remove();
@@ -207,10 +242,8 @@ settingsBtn.onclick = () => {
 
 // --- Recording ---
 recordBtn.onclick = async () => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
-    return;
-  }
+  if (recording) { stopRecording(); return; }
+
   const apiKey = localStorage.getItem(APIKEY_KEY);
   if (!apiKey) {
     alert('Please set your Gemini API key in Settings (⚙️) first.');
@@ -226,38 +259,89 @@ recordBtn.onclick = async () => {
     if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
   } catch (e) {}
 
-  chunks = [];
   const mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm';
-  mediaRecorder = new MediaRecorder(stream, { mimeType });
-  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-  mediaRecorder.onstop = async () => {
-    stream.getTracks().forEach(t => t.stop());
-    if (wakeLock) { wakeLock.release(); wakeLock = null; }
-    clearInterval(timerInterval);
-    timerEl.textContent = '';
-    recordBtn.classList.remove('recording');
 
-    const blob = new Blob(chunks, { type: mimeType });
-    const durationSec = Math.round((Date.now() - startTime) / 1000);
-    const id = Date.now().toString();
-    const note = {
-      id,
-      createdAt: Date.now(),
-      duration: formatDuration(durationSec),
-      status: 'transcribing',
-      title: 'Meeting note',
-    };
-    notes.push(note);
-    saveNotes(); renderNotes();
-    transcribe(blob, mimeType, id, apiKey);
-  };
-  mediaRecorder.start();
+  activeNoteId = Date.now().toString();
+  notes.push({
+    id: activeNoteId,
+    createdAt: Date.now(),
+    duration: '0:00',
+    status: 'recording',
+    title: 'Meeting note',
+    segments: [],
+  });
+  saveNotes(); renderNotes();
+
+  recording = true;
   startTime = Date.now();
   recordBtn.classList.add('recording');
   timerInterval = setInterval(() => {
-    timerEl.textContent = formatDuration(Math.round((Date.now() - startTime) / 1000));
+    const secs = Math.round((Date.now() - startTime) / 1000);
+    timerEl.textContent = formatDuration(secs);
+    const note = notes.find((n) => n.id === activeNoteId);
+    if (note) note.duration = formatDuration(secs);
   }, 500);
+
+  // Warm the model choice up front so the first segment isn't delayed by it.
+  resolveModel(apiKey);
+  startSegment(mimeType, apiKey);
 };
+
+function startSegment(mimeType, apiKey) {
+  if (!recording) return;
+
+  chunks = [];
+  mediaRecorder = new MediaRecorder(stream, { mimeType });
+  const note = notes.find((n) => n.id === activeNoteId);
+  const segIndex = note ? note.segments.length : 0;
+  if (note) note.segments.push(null); // null = still transcribing
+
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(chunks, { type: mimeType });
+    const wasLast = !recording;
+
+    // Each segment is a standalone file, so it can be transcribed on its own.
+    if (blob.size > 0) {
+      transcribeSegment(blob, mimeType, activeNoteId, segIndex, apiKey, wasLast);
+    } else if (wasLast) {
+      finalizeNote(activeNoteId);
+    }
+
+    if (recording) startSegment(mimeType, apiKey);
+  };
+
+  mediaRecorder.start();
+  segmentTimer = setTimeout(() => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  }, SEGMENT_MS);
+}
+
+function stopRecording() {
+  recording = false;
+  clearTimeout(segmentTimer);
+  clearInterval(timerInterval);
+  timerEl.textContent = '';
+  recordBtn.classList.remove('recording');
+
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  } else {
+    finalizeNote(activeNoteId);
+  }
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+function finalizeNote(id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  const pending = (note.segments || []).some((s) => s === null);
+  note.status = pending ? 'transcribing' : 'done';
+  const text = noteText(note);
+  if (text) note.title = text.split(/[.!?\n]/)[0].slice(0, 60) || 'Meeting note';
+  saveNotes(); renderNotes();
+}
 
 function formatDuration(sec) {
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -327,7 +411,7 @@ async function callGemini(model, apiKey, base64Audio, mimeType) {
   );
 }
 
-async function transcribe(blob, mimeType, id, apiKey) {
+async function transcribeSegment(blob, mimeType, id, segIndex, apiKey, isLast) {
   try {
     const base64Audio = await blobToBase64(blob);
     let model = await resolveModel(apiKey);
@@ -345,19 +429,37 @@ async function transcribe(blob, mimeType, id, apiKey) {
       throw new Error(`API error ${res.status} (model ${model}): ${errText.slice(0, 200)}`);
     }
     const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
-    const note = notes.find(n => n.id === id);
-    if (note) {
-      note.transcript = text || '(no speech detected)';
-      note.status = 'done';
-      note.title = (text || '').split(/[.!?\n]/)[0].slice(0, 60) || 'Meeting note';
-    }
+    const text = (data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '').trim();
+    const note = notes.find((n) => n.id === id);
+    if (note) note.segments[segIndex] = text;
   } catch (err) {
-    const note = notes.find(n => n.id === id);
-    if (note) { note.status = 'error'; note.error = err.message; }
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      note.segments[segIndex] = '';
+      note.error = err.message;
+      // Surface the failure only if nothing at all was captured.
+      if (!noteText(note)) note.status = 'error';
+    }
   }
-  saveNotes(); renderNotes();
+
+  const note = notes.find((n) => n.id === id);
+  const stillPending = note && (note.segments || []).some((s) => s === null);
+  if (note && !recording && !stillPending && note.status !== 'error') {
+    finalizeNote(id);
+  } else {
+    saveNotes(); renderNotes();
+  }
 }
+
+// A recording interrupted by a reload can't be resumed - don't leave it "live".
+notes.forEach((n) => {
+  if (n.status === 'recording' || n.status === 'transcribing') {
+    n.segments = (n.segments || []).map((s) => (s === null ? '' : s));
+    n.status = noteText(n) ? 'done' : 'error';
+    if (n.status === 'error' && !n.error) n.error = 'Recording interrupted';
+  }
+});
+saveNotes();
 
 renderNotes();
 
